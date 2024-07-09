@@ -33,7 +33,8 @@ typedef struct {
     char* name;
     void (*fun)(file_stack*);
 } menu_item;
-
+//---------------------------------------------------------------------------
+// PART 0
 void toggle_debug_mode(state *s) {
     if (s->debug_mode) {
         printf("Debug flag now off\n");
@@ -154,6 +155,30 @@ void examine_ELF_file(file_stack* stack) {
     stack->valid_state_files[empty_index] = 1;
     print_elf_info(s);
 }
+//---------------------------------------------------------------------------
+// PART 1
+// Function to print section names
+void print_section_names(file_stack* stack) {
+    for (int i = 0; i < MAX_FILES; ++i) {
+        if (stack->valid_state_files[i] == 1) {
+            state* s = &stack->files[i];
+            Elf32_Shdr* sh_table = (Elf32_Shdr*)(s->map_start + s->sh_offset);
+            Elf32_Shdr* shstrtab_hdr = &sh_table[s->header->e_shstrndx];
+            char* shstrtab = (char*)(s->map_start + shstrtab_hdr->sh_offset);
+
+            printf("File %s\n", s->file_name);
+
+            printf("[index] section_name section_address section_offset section_size  section_type\n");
+            
+            for (int j = 0; j < s->sh_num; ++j) {
+                printf("[%d] %s 0x%x %d %d  %d\n", j, &shstrtab[sh_table[j].sh_name], sh_table[j].sh_addr, sh_table[j].sh_offset, sh_table[j].sh_size, sh_table[j].sh_type);
+            }
+        } else {
+            break;  // Stop iterating if encounter an invalid file state
+        }
+    }
+}
+
 
 void not_implemented(file_stack* stack) {
     printf("Not implemented yet\n");
@@ -174,7 +199,7 @@ int main(void) {
     menu_item menu[] = {
         {"Toggle Debug Mode", toggle_debug_mode_file_stack},
         {"Examine ELF File", examine_ELF_file},
-        {"Print Section Names", not_implemented},
+        {"Print Section Names", print_section_names},
         {"Print Symbols", not_implemented},
         {"Check Files for Merge", not_implemented},
         {"Merge ELF Files", not_implemented},
