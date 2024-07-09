@@ -11,7 +11,8 @@
 typedef struct {
     char debug_mode;
     char file_name[128];
-    unsigned char mem_buf[10000];
+    unsigned char* map_start;
+    Elf32_Ehdr* header;
     char magic[4];             // Bytes 1, 2, 3 of the magic number (in ASCII)
     char data_encoding[20];    // Data encoding scheme of the object file
     unsigned int entry_point;  // Entry point (hexadecimal address)
@@ -21,20 +22,19 @@ typedef struct {
     unsigned int ph_offset;    // File offset in which the program header table resides
     unsigned int ph_num;       // Number of program header entries
     unsigned int ph_size;      // Size of each program header entry
-
-} ELF_file_desc;
+} state;
 
 typedef struct {
-    ELF_file_desc files[MAX_FILES];
+    state files[MAX_FILES];
     int valid_state_files[MAX_FILES];
-} file_stack
+} file_stack;
 
 typedef struct {
     char* name;
-    void (*fun)(state*);
+    void (*fun)(file_stack*);
 } menu_item;
 
-void toggle_debug_mode(ELF_file_desc *file_desc) {
+void toggle_debug_mode(state *s) {
     if (s->debug_mode) {
         printf("Debug flag now off\n");
         s->debug_mode = 0;
@@ -44,121 +44,135 @@ void toggle_debug_mode(ELF_file_desc *file_desc) {
     }
 }
 
-void examine_ELF_file(file_stack* stack){
-    //Get the file name from the user
+void toggle_debug_mode_file_stack(file_stack *stack) {
+    for (int i = 0; i < MAX_FILES; i++) {
+        if (stack->valid_state_files[i] == 1) {
+            toggle_debug_mode(&stack->files[i]);
+        }
+    }
+}
+
+void print_elf_info(state *s) {
+    printf("Magic: %.3s\n", s->magic);
+    printf("Data Encoding: %s\n", s->data_encoding);
+    printf("Entry point: 0x%x\n", s->entry_point);
+    printf("Section header table offset: %d\n", s->sh_offset);
+    printf("Number of section header entries: %d\n", s->sh_num);
+    printf("Size of each section header entry: %d\n", s->sh_size);
+    printf("Program header table offset: %d\n", s->ph_offset);
+    printf("Number of program header entries: %d\n", s->ph_num);
+    printf("Size of each program header entry: %d\n", s->ph_size);
+}
+
+int find_file_index(file_stack* stack, const char* file_name) {
+    for (int i = 0; i < MAX_FILES; ++i) {
+        if (strcmp(stack->files[i].file_name, file_name) == 0 && stack->valid_state_files[i] == 1) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void examine_ELF_file(file_stack* stack) {
+    // Get the file name from the user
     char file_name[128];
     printf("Enter ELF file name: ");
     fgets(file_name, sizeof(file_name), stdin);
     file_name[strcspn(file_name, "\n")] = 0;
 
     // Check if the file is already in the stack
-    int found_index = -1;
+    int found_index = find_file_index(stack, file_name);
+
+    if (found_index != -1) {
+        print_elf_info(&stack->files[found_index]);
+        return;
+    }
+
+    // Find a place to store the new file information
+    int empty_index = -1;
     for (int i = 0; i < MAX_FILES; ++i) {
-        if (strcmp(stack->files[i].file_name, file_name) == 0 && stack->valid_state_files[i] == 1) {
-            found_index = i;
+        if (stack->valid_state_files[i] == 0) {
+            empty_index = i;
             break;
         }
     }
 
-    if (found_index != -1) {
-        print_elf_info(&stack->files[found_index]);
-    } else {
-        // File not found in the stack, find a place to store it
-        int empty_index = -1;
-        for (int i = 0; i < MAX_FILES; ++i) {
-            if (stack->valid_state_files[i] == 0 || stack->valid_state_files[i] == -1) {
-                empty_index = i;
-                break;
-            }
-        }
-
-        if (empty_index == -1) {
-            printf("File stack is full. Cannot add more files.\n");
-            return;
-        }
-
-        // Initialize a new ELF_file_desc for the file
-        int fd = open(file_name, O_RDONLY);
-        if (fd < 0) {
-            perror("Error opening file");
-            return;
-        }
-
-        struct stat st;
-        if (fstat(fd, &st) < 0) {
-            perror("Error getting file size");
-            close(fd);
-            return;
-        }
-
-        void* map_start = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (map_start == MAP_FAILED) {
-            perror("Error mapping file");
-            close(fd);
-            return;
-        }
-
-        Elf32_Ehdr *header = (Elf32_Ehdr *)map_start;
-
-        if (header->e_ident[EI_MAG0] != ELFMAG0 || header->e_ident[EI_MAG1] != ELFMAG1 ||
-            header->e_ident[EI_MAG2] != ELFMAG2 || header->e_ident[EI_MAG3] != ELFMAG3) {
-            printf("Error: Not a valid ELF file\n");
-            munmap(map_start, st.st_size);
-            close(fd);
-            return;
-        }
-
-        ELF_file_desc *file_desc = &stack->files[empty_index];
-        memcpy(file_desc->magic, &header->e_ident[1], 3);
-        file_desc->magic[3] = '\0';
-        strcpy(file_desc->data_encoding, header->e_ident[EI_DATA] == ELFDATA2LSB ? "2's complement, little endian" : "2's complement, big endian");
-        file_desc->entry_point = header->e_entry;
-        file_desc->sh_offset = header->e_shoff;
-        file_desc->sh_num = header->e_shnum;
-        file_desc->sh_size = header->e_shentsize;
-        file_desc->ph_offset = header->e_phoff;
-        file_desc->ph_num = header->e_phnum;
-        file_desc->ph_size = header->e_phentsize;
-        strncpy(file_desc->file_name, file_name, sizeof(file_desc->file_name));
-
-        // Mark the stack as valid
-        stack->valid_state_files[empty_index] = 1;
-
-        printf("File added to stack:\n");
-        print_elf_info(file_desc);
-
-        munmap(map_start, st.st_size);
+    if (empty_index == -1) {
+        printf("Cannot handle more than %d ELF files.\n", MAX_FILES);
+        return;
     }
+
+    // Open the file
+    int fd = open(file_name, O_RDONLY);
+    if (fd < 0) {
+        perror("Failed to open file");
+        return;
+    }
+
+    // Get the file size
+    off_t file_size = lseek(fd, 0, SEEK_END);
+    if (file_size < 0) {
+        perror("Failed to get file size");
+        close(fd);
+        return;
+    }
+    lseek(fd, 0, SEEK_SET);
+
+    // Map the file into memory
+    void* map_start = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map_start == MAP_FAILED) {
+        perror("Failed to map file");
+        close(fd);
+        return;
+    }
+
+    // Check if the file is an ELF file
+    Elf32_Ehdr* header = (Elf32_Ehdr*)map_start;
+    if (strncmp((char*)header->e_ident, ELFMAG, SELFMAG) != 0) {
+        printf("Not an ELF file\n");
+        munmap(map_start, file_size);
+        close(fd);
+        return;
+    }
+
+    // Fill the state structure with information
+    state* s = &stack->files[empty_index];
+    s->map_start = map_start;
+    s->header = header;
+    strncpy(s->file_name, file_name, sizeof(s->file_name) - 1);
+    memcpy(s->magic, header->e_ident, 4);
+    s->magic[4] = '\0';
+    snprintf(s->data_encoding, sizeof(s->data_encoding), "%d", header->e_ident[EI_DATA]);
+    s->entry_point = header->e_entry;
+    s->sh_offset = header->e_shoff;
+    s->sh_num = header->e_shnum;
+    s->sh_size = header->e_shentsize;
+    s->ph_offset = header->e_phoff;
+    s->ph_num = header->e_phnum;
+    s->ph_size = header->e_phentsize;
+
+    stack->valid_state_files[empty_index] = 1;
+    print_elf_info(s);
 }
 
-void print_elf_info(ELF_file_desc *file_desc) {
-    printf("Magic: %.3s\n", file_desc->magic);
-    printf("Data Encoding: %s\n", file_desc->data_encoding);
-    printf("Entry point: 0x%x\n", file_desc->entry_point);
-    printf("Section header table offset: %d\n", file_desc->sh_offset);
-    printf("Number of section header entries: %d\n", file_desc->sh_num);
-    printf("Size of each section header entry: %d\n", file_desc->sh_size);
-    printf("Program header table offset: %d\n", file_desc->ph_offset);
-    printf("Number of program header entries: %d\n", file_desc->ph_num);
-    printf("Size of each program header entry: %d\n", file_desc->ph_size);
+void not_implemented(file_stack* stack) {
+    printf("Not implemented yet\n");
 }
 
-void not_implemented(){
-    printf("not implemented yet");
-}
-
-void quit(state* s) {
-    if (s->debug_mode) {
-        printf("quitting\n");
+void quit(file_stack* stack) {
+    for (int i = 0; i < MAX_FILES; ++i) {
+        if (stack->valid_state_files[i] == 1) {
+            munmap(stack->files[i].map_start, sizeof(Elf32_Ehdr));
+            stack->valid_state_files[i] = 0;
+        }
     }
     exit(0);
 }
 
-
 int main(void) {
-    state s = {0, "deep_thought", 1, {0}, 0, 0, {-1, -1}, {NULL, NULL}, {0, 0}};
+    file_stack s = {0};
     menu_item menu[] = {
-        {"Toggle Debug Mode", toggle_debug_mode},
+        {"Toggle Debug Mode", toggle_debug_mode_file_stack},
         {"Examine ELF File", examine_ELF_file},
         {"Print Section Names", not_implemented},
         {"Print Symbols", not_implemented},
@@ -169,10 +183,6 @@ int main(void) {
     };
 
     while (1) {
-        if (s.debug_mode) {
-            fprintf(stderr, "Debug:\nunit_size: %d\nfile_name: %s\nmem_count: %zu\n", s.unit_size, s.file_name, s.mem_count);
-        }
-
         printf("Choose action:\n");
         for (int i = 0; menu[i].name != NULL; i++) {
             printf("%d-%s\n", i, menu[i].name);
@@ -187,7 +197,6 @@ int main(void) {
         } else {
             printf("Invalid choice\n");
         }
-        if (choice == 6) while (getchar() != '\n');
     }
 
     return 0;
