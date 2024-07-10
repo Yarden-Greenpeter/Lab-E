@@ -185,45 +185,50 @@ void print_symbols(file_stack* stack) {
     for (int i = 0; i < MAX_FILES; i++) {
         if (stack->valid_state_files[i] == 1) {
             state* s = &stack->files[i];
-            Elf32_Shdr* sh_table = (Elf32_Shdr*)(s->map_start + s->sh_offset);
+            Elf32_Shdr* sh_table = (Elf32_Shdr*)(s->map_start + s->header->e_shoff);
             Elf32_Shdr* symtab_hdr = NULL;
             Elf32_Shdr* strtab_hdr = NULL;
+            Elf32_Shdr* shstrtab_hdr = &sh_table[s->header->e_shstrndx];
+            char* shstrtab = (char*)(s->map_start + shstrtab_hdr->sh_offset);
             char* strtab = NULL;
-            char* shstrtab = NULL;
-
             // Find the symbol table and corresponding string table section headers
-            for (unsigned int  j = 0; j < s->sh_num; j++) {
+            for (unsigned int j = 0; j < s->header->e_shnum; j++) {
                 if (sh_table[j].sh_type == SHT_SYMTAB) {
                     symtab_hdr = &sh_table[j];
-                } else if (sh_table[j].sh_type == SHT_STRTAB && strcmp(".strtab", (char*)(s->map_start + sh_table[j].sh_name)) == 0) {
-                    strtab_hdr = &sh_table[j];
-                    strtab = (char*)(s->map_start + strtab_hdr->sh_offset);
+                }
+                if (sh_table[j].sh_type == SHT_STRTAB) {
+                    if (strcmp(&shstrtab[sh_table[j].sh_name], ".strtab") == 0) {
+                        strtab_hdr = &sh_table[j];
+                        strtab = (char*)(s->map_start + strtab_hdr->sh_offset);
+                    }
                 }
             }
-
-            if (symtab_hdr == NULL || strtab_hdr == NULL || strtab == NULL) {
-                printf("Symbol table or string table not found in %s\n", s->file_name);
+            //check for an invalid symbol table, string table.
+            if (symtab_hdr == NULL) {
+                printf("Symbol table not found in %s\n", s->file_name);
                 continue;
             }
-
-            // Calculate the number of symbols
+            if (strtab_hdr == NULL || strtab == NULL) {
+                printf("String table not found in %s\n", s->file_name);
+                continue;
+            }
             int num_symbols = symtab_hdr->sh_size / sizeof(Elf32_Sym);
             Elf32_Sym* symtab = (Elf32_Sym*)(s->map_start + symtab_hdr->sh_offset);
-
-            // Print header
+            //Start the printing process
             printf("File %s\n", s->file_name);
             printf("[index] value section_index section_name symbol_name\n");
 
             // Print each symbol
             for (int k = 0; k < num_symbols; k++) {
-                printf("[%d] 0x%08x %d %s %s\n", k, symtab[k].st_value, symtab[k].st_shndx, &shstrtab[symtab[k].st_shndx], &strtab[symtab[k].st_name]);
+                const char* section_name = (symtab[k].st_shndx < s->header->e_shnum) ? &shstrtab[sh_table[symtab[k].st_shndx].sh_name] : "UNDEF";
+                const char* symbol_name = (symtab[k].st_name != 0) ? &strtab[symtab[k].st_name] : "NULL";
+                printf("[%d] 0x%08x %d %s %s\n", k, symtab[k].st_value, symtab[k].st_shndx, section_name, symbol_name);
             }
         } else {
             break;  // Stop if encounter an invalid file state
         }
     }
 }
-
 //------------------------------------------------------------------------------------------
 
 void not_implemented(file_stack* stack) {
