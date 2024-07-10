@@ -181,46 +181,60 @@ void print_section_names(file_stack* stack) {
 //------------------------------------------------------------------------------------
 //Part 2
 // Function to print symbols
+int find_symtab_and_strtab(state* s, Elf32_Shdr** symtab_hdr, Elf32_Shdr** strtab_hdr, char** strtab) {
+    Elf32_Shdr* sh_table = (Elf32_Shdr*)(s->map_start + s->sh_offset);
+    Elf32_Shdr* shstrtab_hdr = &sh_table[s->header->e_shstrndx];
+    char* shstrtab = (char*)(s->map_start + shstrtab_hdr->sh_offset);
+
+    *symtab_hdr = NULL;
+    *strtab_hdr = NULL;
+    *strtab = NULL;
+
+    for (unsigned int j = 0; j < s->sh_num; j++) {
+        if (sh_table[j].sh_type == SHT_SYMTAB) {
+            *symtab_hdr = &sh_table[j];
+        }
+        if (sh_table[j].sh_type == SHT_STRTAB) {
+            if (strcmp(&shstrtab[sh_table[j].sh_name], ".strtab") == 0) {
+                *strtab_hdr = &sh_table[j];
+                *strtab = (char*)(s->map_start + (*strtab_hdr)->sh_offset);
+            }
+        }
+    }
+
+    if (*symtab_hdr == NULL || *strtab_hdr == NULL || *strtab == NULL) {
+        return -1;
+    }
+
+    return 0;
+}
+
 void print_symbols(file_stack* stack) {
     for (int i = 0; i < MAX_FILES; i++) {
         if (stack->valid_state_files[i] == 1) {
             state* s = &stack->files[i];
-            Elf32_Shdr* sh_table = (Elf32_Shdr*)(s->map_start + s->header->e_shoff);
-            Elf32_Shdr* symtab_hdr = NULL;
-            Elf32_Shdr* strtab_hdr = NULL;
-            Elf32_Shdr* shstrtab_hdr = &sh_table[s->header->e_shstrndx];
-            char* shstrtab = (char*)(s->map_start + shstrtab_hdr->sh_offset);
-            char* strtab = NULL;
-            // Find the symbol table and corresponding string table section headers
-            for (unsigned int j = 0; j < s->header->e_shnum; j++) {
-                if (sh_table[j].sh_type == SHT_SYMTAB) {
-                    symtab_hdr = &sh_table[j];
-                }
-                if (sh_table[j].sh_type == SHT_STRTAB) {
-                    if (strcmp(&shstrtab[sh_table[j].sh_name], ".strtab") == 0) {
-                        strtab_hdr = &sh_table[j];
-                        strtab = (char*)(s->map_start + strtab_hdr->sh_offset);
-                    }
-                }
-            }
-            //check for an invalid symbol table, string table.
-            if (symtab_hdr == NULL) {
-                printf("Symbol table not found in %s\n", s->file_name);
+            Elf32_Shdr* symtab_hdr;
+            Elf32_Shdr* strtab_hdr;
+            char* strtab;
+            if (find_symtab_and_strtab(s, &symtab_hdr, &strtab_hdr, &strtab) < 0) {
+                printf("Symbol table or string table not found in %s\n", s->file_name);
                 continue;
             }
-            if (strtab_hdr == NULL || strtab == NULL) {
-                printf("String table not found in %s\n", s->file_name);
-                continue;
-            }
+
             int num_symbols = symtab_hdr->sh_size / sizeof(Elf32_Sym);
             Elf32_Sym* symtab = (Elf32_Sym*)(s->map_start + symtab_hdr->sh_offset);
-            //Start the printing process
+
+            // Get section header string table
+            Elf32_Shdr* shstrtab_hdr = (Elf32_Shdr*)(s->map_start + s->sh_offset) + s->header->e_shstrndx;
+            char* shstrtab = (char*)(s->map_start + shstrtab_hdr->sh_offset);
+
+            // Start the printing process
             printf("File %s\n", s->file_name);
             printf("[index] value section_index section_name symbol_name\n");
 
             // Print each symbol
             for (int k = 0; k < num_symbols; k++) {
-                const char* section_name = (symtab[k].st_shndx < s->header->e_shnum) ? &shstrtab[sh_table[symtab[k].st_shndx].sh_name] : "UNDEF";
+                const char* section_name = (symtab[k].st_shndx < s->header->e_shnum) ? &shstrtab[((Elf32_Shdr*)(s->map_start + s->sh_offset))[symtab[k].st_shndx].sh_name] : "UNDEF";
                 const char* symbol_name = (symtab[k].st_name != 0) ? &strtab[symtab[k].st_name] : "NULL";
                 printf("[%d] 0x%08x %d %s %s\n", k, symtab[k].st_value, symtab[k].st_shndx, section_name, symbol_name);
             }
@@ -230,7 +244,64 @@ void print_symbols(file_stack* stack) {
     }
 }
 //------------------------------------------------------------------------------------------
+//part 3.1
+// Function to check files for merge
+void CheckMerge(file_stack* stack) {
+    // Ensure exactly 2 valid ELF files
+    if (stack->valid_state_files[0] != 1 || stack->valid_state_files[1] != 1) {
+        printf("Error: Exactly 2 ELF files must be opened and mapped.\n");
+        return;
+    }
 
+    state* s1 = &stack->files[0];
+    state* s2 = &stack->files[1];
+    Elf32_Shdr *symtab_hdr1, *strtab_hdr1;
+    Elf32_Shdr *symtab_hdr2, *strtab_hdr2;
+    char *strtab1, *strtab2;
+
+    // Find the symbol tables and string tables for both files
+    if (find_symtab_and_strtab(s1, &symtab_hdr1, &strtab_hdr1, &strtab1) < 0 ||
+        find_symtab_and_strtab(s2, &symtab_hdr2, &strtab_hdr2, &strtab2) < 0) {
+        printf("Feature not supported: Each file must contain exactly one symbol table.\n");
+        return;
+    }
+
+    Elf32_Sym *symtab1 = (Elf32_Sym*)(s1->map_start + symtab_hdr1->sh_offset);
+    Elf32_Sym *symtab2 = (Elf32_Sym*)(s2->map_start + symtab_hdr2->sh_offset);
+    int num_symbols1 = symtab_hdr1->sh_size / sizeof(Elf32_Sym);
+    int num_symbols2 = symtab_hdr2->sh_size / sizeof(Elf32_Sym);
+
+    // Loop over symbols in SYMTAB1
+    for (int i = 1; i < num_symbols1; i++) {  // Start from 1 to skip the dummy symbol
+        Elf32_Sym* sym1 = &symtab1[i];
+        const char* sym_name1 = &strtab1[sym1->st_name];
+
+        // Search for sym in SYMTAB2
+        int found = 0;
+        for (int j = 1; j < num_symbols2; j++) {  // Start from 1 to skip the dummy symbol
+            Elf32_Sym* sym2 = &symtab2[j];
+            const char* sym_name2 = &strtab2[sym2->st_name];
+
+            if (strcmp(sym_name1, sym_name2) == 0) {
+                found = 1;
+                if (sym1->st_shndx == SHN_UNDEF) {
+                    if (sym2->st_shndx == SHN_UNDEF) {
+                        printf("Symbol %s undefined in both files.\n", sym_name1);
+                    }
+                } else {
+                    if (sym2->st_shndx != SHN_UNDEF) {
+                        printf("Symbol %s multiply defined.\n", sym_name1);
+                    }
+                }
+                break;
+            }
+        }
+        if (sym1->st_shndx == SHN_UNDEF && !found) {
+            printf("Symbol %s undefined in second file.\n", sym_name1);
+        }
+    }
+}
+//-------------------------------------------------------------------------------------
 void not_implemented(file_stack* stack) {
     printf("Not implemented yet\n");
 }
@@ -251,7 +322,7 @@ int main(void) {
         {"Examine ELF File", examine_ELF_file},
         {"Print Section Names", print_section_names},
         {"Print Symbols", print_symbols},
-        {"Check Files for Merge", not_implemented},
+        {"Check Files for Merge", CheckMerge},
         {"Merge ELF Files", not_implemented},
         {"Quit", quit},
         {NULL, NULL}
