@@ -225,7 +225,6 @@ void print_debug_info(state* s, Elf32_Shdr* symtab_hdr, Elf32_Shdr* shstrtab_hdr
     printf("Section Header String Table Offset: %d bytes\n", shstrtab_hdr->sh_offset);
 }
 
-
 // Helper functions to convert symbol information to strings
 const char* get_symbol_type(unsigned char info) {
     switch (ELF32_ST_TYPE(info)) {
@@ -305,7 +304,6 @@ void print_symbols(file_stack* stack) {
             printf("File: %s\n", s->file_name);
             printf("   Num:    Value  Size Type    Bind   Vis      Ndx Name\n");
 
-            // Print each symbol
             for (int k = 0; k < num_symbols; k++) {
                 const char* section_name = "ABS";
                 if (symtab[k].st_shndx == SHN_UNDEF) {
@@ -316,18 +314,13 @@ void print_symbols(file_stack* stack) {
 
                 const char* symbol_name = (symtab[k].st_name != 0) ? &strtab[symtab[k].st_name] : "";
 
-                printf("  %4d: %08x %5d %-7s %-6s %-7s %4s %s\n", 
-                       k, 
-                       symtab[k].st_value, 
-                       symtab[k].st_size, 
-                       get_symbol_type(symtab[k].st_info), 
-                       get_symbol_bind(symtab[k].st_info), 
-                       get_symbol_visibility(symtab[k].st_other), 
-                       section_name, 
-                       symbol_name);
+                printf("  %4d: %08x %5d %-7s %-6s %-7s %4s %s\n", k, symtab[k].st_value, 
+                       symtab[k].st_size, get_symbol_type(symtab[k].st_info), 
+                       get_symbol_bind(symtab[k].st_info), get_symbol_visibility(symtab[k].st_other), 
+                       section_name, symbol_name);
             }
         } else {
-            break;  // Stop if encounter an invalid file state
+            break;
         }
     }
 }
