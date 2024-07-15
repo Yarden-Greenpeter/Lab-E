@@ -56,7 +56,7 @@ void toggle_debug_mode_file_stack(file_stack *stack) {
 void print_elf_info(state *s) {
     printf("Magic: %.3s\n", s->magic);
     printf("Data Encoding: %s\n", s->data_encoding);
-    printf("Entry point: 0x%x\n", s->entry_point);
+    printf("Entry point address: 0x%x\n", s->entry_point);
     printf("Section header table offset: %d\n", s->sh_offset);
     printf("Number of section header entries: %d\n", s->sh_num);
     printf("Size of each section header entry: %d\n", s->sh_size);
@@ -157,6 +157,30 @@ void examine_ELF_file(file_stack* stack) {
 }
 //---------------------------------------------------------------------------
 // PART 1
+// Helper function to convert section type to string
+const char* section_type_to_string(uint32_t sh_type) {
+    switch (sh_type) {
+        case SHT_NULL: return "NULL";
+        case SHT_PROGBITS: return "PROGBITS";
+        case SHT_SYMTAB: return "SYMTAB";
+        case SHT_STRTAB: return "STRTAB";
+        case SHT_RELA: return "RELA";
+        case SHT_HASH: return "HASH";
+        case SHT_DYNAMIC: return "DYNAMIC";
+        case SHT_NOTE: return "NOTE";
+        case SHT_NOBITS: return "NOBITS";
+        case SHT_REL: return "REL";
+        case SHT_SHLIB: return "SHLIB";
+        case SHT_DYNSYM: return "DYNSYM";
+        case SHT_NUM: return "NUM";
+        case SHT_LOPROC: return "LOPROC";
+        case SHT_HIPROC: return "HIPROC";
+        case SHT_LOUSER: return "LOUSER";
+        case SHT_HIUSER: return "HIUSER";
+        default: return "UNKNOWN";
+    }
+}
+
 // Function to print section names
 void print_section_names(file_stack* stack) {
     for (int i = 0; i < MAX_FILES; i++) {
@@ -167,20 +191,25 @@ void print_section_names(file_stack* stack) {
             char* shstrtab = (char*)(s->map_start + shstrtab_hdr->sh_offset);
 
             printf("File %s\n", s->file_name);
+            printf("[%-3s] %-16s %-12s %-7s %-7s %-12s\n", "Nr", "Name", "Type", "Addr", "Off", "Size");
 
-            printf("[index] section_name section_address section_offset section_size  section_type\n");
-            
             for (unsigned int j = 0; j < s->sh_num; j++) {
-                printf("[%d] %s 0x%x %d %d  %d\n", j, &shstrtab[sh_table[j].sh_name], sh_table[j].sh_addr, sh_table[j].sh_offset, sh_table[j].sh_size, sh_table[j].sh_type);
+                printf("[%2d] %-16s %-12s %08x %06x %06x\n",
+                    j,
+                    &shstrtab[sh_table[j].sh_name],
+                    section_type_to_string(sh_table[j].sh_type),
+                    sh_table[j].sh_addr,
+                    sh_table[j].sh_offset,
+                    sh_table[j].sh_size);
             }
         } else {
-            break;  // Stop  if encounter an invalid file state
+            break;  // Stop if encountering an invalid file state
         }
     }
 }
 //------------------------------------------------------------------------------------
 //Part 2
-
+// Function to print debug information (optional, for debug mode)
 void print_debug_info(state* s, Elf32_Shdr* symtab_hdr, Elf32_Shdr* shstrtab_hdr, char* shstrtab) {
     if (symtab_hdr == NULL || shstrtab_hdr == NULL || shstrtab == NULL) {
         printf("Invalid headers or string table for %s\n", s->file_name);
@@ -194,6 +223,40 @@ void print_debug_info(state* s, Elf32_Shdr* symtab_hdr, Elf32_Shdr* shstrtab_hdr
     printf("Symbol Table Offset: %d bytes\n", symtab_hdr->sh_offset);
     printf("String Table Offset: %d bytes\n", shstrtab_hdr->sh_offset);
     printf("Section Header String Table Offset: %d bytes\n", shstrtab_hdr->sh_offset);
+}
+
+
+// Helper functions to convert symbol information to strings
+const char* get_symbol_type(unsigned char info) {
+    switch (ELF32_ST_TYPE(info)) {
+        case STT_NOTYPE:  return "NOTYPE";
+        case STT_OBJECT:  return "OBJECT";
+        case STT_FUNC:    return "FUNC";
+        case STT_SECTION: return "SECTION";
+        case STT_FILE:    return "FILE";
+        case STT_COMMON:  return "COMMON";
+        case STT_TLS:     return "TLS";
+        default:          return "UNKNOWN";
+    }
+}
+
+const char* get_symbol_bind(unsigned char info) {
+    switch (ELF32_ST_BIND(info)) {
+        case STB_LOCAL:  return "LOCAL";
+        case STB_GLOBAL: return "GLOBAL";
+        case STB_WEAK:   return "WEAK";
+        default:         return "UNKNOWN";
+    }
+}
+
+const char* get_symbol_visibility(unsigned char other) {
+    switch (ELF32_ST_VISIBILITY(other)) {
+        case STV_DEFAULT:   return "DEFAULT";
+        case STV_INTERNAL:  return "INTERNAL";
+        case STV_HIDDEN:    return "HIDDEN";
+        case STV_PROTECTED: return "PROTECTED";
+        default:            return "UNKNOWN";
+    }
 }
 
 void print_symbols(file_stack* stack) {
@@ -239,14 +302,29 @@ void print_symbols(file_stack* stack) {
             Elf32_Sym* symtab = (Elf32_Sym*)(s->map_start + symtab_hdr->sh_offset);
 
             // Start the printing process
-            printf("File %s\n", s->file_name);
-            printf("[index] value section_index section_name symbol_name\n");
+            printf("File: %s\n", s->file_name);
+            printf("   Num:    Value  Size Type    Bind   Vis      Ndx Name\n");
 
             // Print each symbol
             for (int k = 0; k < num_symbols; k++) {
-                const char* section_name = (symtab[k].st_shndx < s->header->e_shnum) ? &shstrtab[sh_table[symtab[k].st_shndx].sh_name] : "UNDEF";
-                const char* symbol_name = (symtab[k].st_name != 0) ? &strtab[symtab[k].st_name] : "NULL";
-                printf("[%d] 0x%08x %d %s %s\n", k, symtab[k].st_value, symtab[k].st_shndx, section_name, symbol_name);
+                const char* section_name = "ABS";
+                if (symtab[k].st_shndx == SHN_UNDEF) {
+                    section_name = "UND";
+                } else if (symtab[k].st_shndx < s->header->e_shnum) {
+                    section_name = &shstrtab[sh_table[symtab[k].st_shndx].sh_name];
+                }
+
+                const char* symbol_name = (symtab[k].st_name != 0) ? &strtab[symtab[k].st_name] : "";
+
+                printf("  %4d: %08x %5d %-7s %-6s %-7s %4s %s\n", 
+                       k, 
+                       symtab[k].st_value, 
+                       symtab[k].st_size, 
+                       get_symbol_type(symtab[k].st_info), 
+                       get_symbol_bind(symtab[k].st_info), 
+                       get_symbol_visibility(symtab[k].st_other), 
+                       section_name, 
+                       symbol_name);
             }
         } else {
             break;  // Stop if encounter an invalid file state
